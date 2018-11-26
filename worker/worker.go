@@ -1,10 +1,11 @@
 package worker
 
 import (
-	"github.com/kataras/iris/core/errors"
-	"github.com/service-kit/goroutine-pool/task"
-	"sync"
+	"errors"
 	"fmt"
+	"sync"
+
+	"github.com/service-kit/goroutine-pool/task"
 )
 
 type WorkerStatus uint32
@@ -35,50 +36,75 @@ const (
 	WSI_STOP
 )
 
+type ILoadCounter interface {
+	AddLoad()
+	ReduceLoad()
+	Load() uint64
+}
+
 type WorkerType uint32
 type WorkerFunc func(wp interface{}) error
 type WorkerTaskMap map[task.TaskType]WorkerFunc
 
 type IWorker interface {
-	RegisterTask(t task.TaskType,f WorkerFunc)
+	ID() uint32
+	RegisterTask(t task.TaskType, f WorkerFunc)
 	Start() error
 	Stop() error
 	Suspend() error
 	Resume() error
 	Interrupt() error
-	AddTask(t task.Task) error
+	AddTask(t task.ITask) error
 	Status() WorkerStatus
 	WorkStatus() WorkerWorkStatus
+	SetLoadCounter(lc ILoadCounter)
 }
 
 type Worker struct {
-	wtm       WorkerTaskMap
+	id       uint32
+	wtm      WorkerTaskMap
 	capacity uint32
 	size     uint32
-	taskCh   chan task.Task
+	taskCh   chan task.ITask
 	mutex    sync.Mutex
 	signalCh chan WorkerSignal
 	status   WorkerStatus
+	lc       ILoadCounter
 }
 
-func (w *Worker) RegisterTask(t task.TaskType,f WorkerFunc) {
+func (w *Worker) ID() uint32 {
+	return w.id
+}
+
+func (w *Worker) SetLoadCounter(lc ILoadCounter) {
+	w.lc = lc
+}
+
+func (w *Worker) RegisterTask(t task.TaskType, f WorkerFunc) {
 	w.wtm[t] = f
 }
 
-func (w *Worker) AddTask(t task.Task) (err error) {
+func (w *Worker) AddTask(t task.ITask) (err error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 	if w.size == w.capacity {
 		return errors.New("worker busy")
 	}
 	w.taskCh <- t
+	w.lc.AddLoad()
 	return nil
 }
 
 func (w *Worker) Start() (err error) {
 	w.status = WS_RUNNING
-	go w.workLoop()
+	go w.safeWorkLoop()
 	return
+}
+
+func (w *Worker) safeWorkLoop() {
+	for {
+		w.workLoop()
+	}
 }
 
 func (w *Worker) Stop() (err error) {
@@ -143,15 +169,11 @@ func (w *Worker) workLoop() {
 	for {
 		select {
 		case t := <-w.taskCh:
-			f := w.wtm[t.GetType()]
-			if nil == f {
-				fmt.Errorf("invalid type:%v\n",t.GetType())
-				continue
+			err := w.proessTask(t)
+			if nil != err {
+				fmt.Println("process task err ", err.Error())
 			}
-			e := f(t.GetParam())
-			if nil != e {
-				fmt.Errorf("do task err:%v\n",e)
-			}
+			w.lc.ReduceLoad()
 		case sig := <-w.signalCh:
 			if sig == WSI_SUSPEND {
 				for {
@@ -170,11 +192,27 @@ func (w *Worker) workLoop() {
 	}
 }
 
-func NewWorker(capacity uint32) IWorker {
+func (w *Worker) proessTask(t task.ITask) error {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println("process task panic ", err)
+		}
+	}()
+	f := w.wtm[t.GetType()]
+	if nil == f {
+		errStr := fmt.Sprintf("invalid task type:%v", t.GetType())
+		return errors.New(errStr)
+	}
+	return f(t.GetParam())
+}
+
+func NewWorker(id, capacity uint32) IWorker {
 	w := new(Worker)
+	w.id = id
 	w.capacity = capacity
-	w.taskCh = make(chan task.Task, capacity)
+	w.taskCh = make(chan task.ITask, capacity)
 	w.signalCh = make(chan WorkerSignal)
 	w.status = WS_NULL
+	w.wtm = make(WorkerTaskMap)
 	return w
 }

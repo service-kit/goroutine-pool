@@ -29,3 +29,10 @@ func (t *Task) SetParam(p interface{}) {
 func (t *Task) GetParam() interface{} {
 	return t.param
 }
+
+func NewTask(tt TaskType, tp interface{}) ITask {
+	t := new(Task)
+	t.SetType(tt)
+	t.SetParam(tp)
+	return t
+}
