@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/service-kit/goroutine-pool/task"
+	"time"
 )
 
 type WorkerStatus uint32
@@ -58,6 +59,8 @@ type IWorker interface {
 	Status() WorkerStatus
 	WorkStatus() WorkerWorkStatus
 	SetLoadCounter(lc ILoadCounter)
+	SetTimeout(timeout time.Duration)
+	GetTimeout() time.Duration
 }
 
 type Worker struct {
@@ -70,6 +73,8 @@ type Worker struct {
 	signalCh chan WorkerSignal
 	status   WorkerStatus
 	lc       ILoadCounter
+	timeout  time.Duration
+	errCh    chan error
 }
 
 func (w *Worker) ID() uint32 {
@@ -90,6 +95,7 @@ func (w *Worker) AddTask(t task.ITask) (err error) {
 	if w.size == w.capacity {
 		return errors.New("worker busy")
 	}
+	t.SetDeadline(time.Now().Add(w.timeout).UnixNano() / int64(time.Millisecond))
 	w.taskCh <- t
 	w.lc.AddLoad()
 	return nil
@@ -99,6 +105,14 @@ func (w *Worker) Start() (err error) {
 	w.status = WS_RUNNING
 	go w.safeWorkLoop()
 	return
+}
+
+func (w *Worker) SetTimeout(timeout time.Duration) {
+	w.timeout = timeout
+}
+
+func (w *Worker) GetTimeout() time.Duration {
+	return w.timeout
 }
 
 func (w *Worker) safeWorkLoop() {
@@ -203,7 +217,22 @@ func (w *Worker) proessTask(t task.ITask) error {
 		errStr := fmt.Sprintf("invalid task type:%v", t.GetType())
 		return errors.New(errStr)
 	}
-	return f(t.GetParam())
+	nowMilSec := time.Now().UnixNano() / int64(time.Millisecond)
+	checkTime := t.GetDeadline() - nowMilSec
+	if checkTime <= 0 {
+		return errors.New("task timeout")
+	}
+	wf := func(param interface{}) chan error {
+		w.errCh <- f(t.GetParam())
+		return w.errCh
+	}
+	timeTicker := time.NewTicker(time.Duration(checkTime) * time.Millisecond)
+	select {
+	case <-timeTicker.C:
+		return errors.New("task timeout")
+	case err := <-wf(t.GetParam()):
+		return err
+	}
 }
 
 func NewWorker(id, capacity uint32) IWorker {
@@ -211,7 +240,8 @@ func NewWorker(id, capacity uint32) IWorker {
 	w.id = id
 	w.capacity = capacity
 	w.taskCh = make(chan task.ITask, capacity)
-	w.signalCh = make(chan WorkerSignal)
+	w.signalCh = make(chan WorkerSignal, 1)
+	w.errCh = make(chan error, 1)
 	w.status = WS_NULL
 	w.wtm = make(WorkerTaskMap)
 	return w

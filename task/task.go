@@ -7,11 +7,14 @@ type ITask interface {
 	GetType() TaskType
 	SetParam(p interface{})
 	GetParam() interface{}
+	SetDeadline(deadline int64)
+	GetDeadline() int64
 }
 
 type Task struct {
-	tType TaskType
-	param interface{}
+	tType    TaskType
+	param    interface{}
+	deadline int64
 }
 
 func (t *Task) SetType(tt TaskType) {
@@ -28,6 +31,14 @@ func (t *Task) SetParam(p interface{}) {
 
 func (t *Task) GetParam() interface{} {
 	return t.param
+}
+
+func (t *Task) SetDeadline(deadline int64) {
+	t.deadline = deadline
+}
+
+func (t *Task) GetDeadline() int64 {
+	return t.deadline
 }
 
 func NewTask(tt TaskType, tp interface{}) ITask {

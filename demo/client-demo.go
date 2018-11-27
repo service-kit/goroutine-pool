@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,7 +24,7 @@ func ping(c *http.Client, path string) {
 		return
 	}
 	et := time.Now().UnixNano() / int64(time.Microsecond)
-	fmt.Print(rsp.StatusCode, et-bt)
+	fmt.Printf("status code:%v cost time:%v\n", rsp.StatusCode, et-bt)
 	data, err := ioutil.ReadAll(rsp.Body)
 	if nil != err {
 		fmt.Println("ping err ", err.Error())
@@ -36,10 +38,21 @@ func main() {
 	go func() {
 		for {
 			go func() {
-				c := new(http.Client)
-				ping(c, "ping")
+				tcpAddr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:8001")
+				conn, err := net.DialTCP("tcp", nil, tcpAddr)
+				if err != nil {
+					fmt.Println("server is not starting")
+					return
+				}
+				conn.Write([]byte("ping"))
+				conn.CloseWrite()
+				fmt.Println(conn.RemoteAddr().String())
+				readBuf := new(bytes.Buffer)
+				readBuf.ReadFrom(conn)
+				conn.CloseRead()
+				fmt.Println(readBuf.String())
 			}()
-			time.Sleep(30 * time.Millisecond)
+			time.Sleep(time.Second)
 		}
 	}()
 	wg.Add(1)

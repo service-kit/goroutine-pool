@@ -58,7 +58,7 @@ func (p *Pool) AddTask(t task.ITask) (err error) {
 	return p.wm[id].AddTask(t)
 }
 
-func (p *Pool) checkPool() {
+func (p *Pool) ShowPoolLoad() {
 	for {
 		p.lb.ShowLoad()
 		time.Sleep(time.Second)
@@ -73,12 +73,12 @@ func (p *Pool) InitPool() (err error) {
 	var i uint32 = 1
 	for ; i <= p.size; i++ {
 		w := worker.NewWorker(i, 1024)
+		w.SetTimeout(p.timeout)
 		p.lb.RegisterLoadCounter(i)
 		w.SetLoadCounter(p.lb.GetLoacCounter(i))
 		w.Start()
 		p.wm[i] = w
 	}
-	go p.checkPool()
 	return
 }
 
